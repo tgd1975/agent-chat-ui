@@ -2,18 +2,45 @@
 # One-shot Azure deploy for agent-chat-ui.
 #
 # Run inside Azure Cloud Shell (Bash), from the repo root:
-#     ./deploy.sh
+#     bash deploy.sh           # deploy (idempotent — safe to re-run)
+#     bash deploy.sh clean      # delete everything + purge soft-deleted OpenAI
 #
 # Cloud Shell is already logged in, so this script reads your Azure OpenAI key
 # itself — you never type or paste a secret. Press Enter to accept defaults.
-# It is idempotent: if something fails, fix it and run again.
 set -euo pipefail
 
 say() { printf '\n==> %s\n' "$*"; }
 
+MODE=${1:-deploy}
+
 # --- 0. login check -------------------------------------------------------
 az account show -o none 2>/dev/null || { echo "Not logged in. Run: az login"; exit 1; }
 say "Subscription: $(az account show --query name -o tsv)"
+
+SUFFIX=$(az account show --query id -o tsv | tr -d '-' | cut -c1-10)
+AOAI=aoai-agentchat-$SUFFIX    # globally unique Azure OpenAI resource
+
+# Purge any soft-deleted Azure OpenAI accounts left from earlier runs (the
+# thing that makes re-runs hang with "already exists"). Safe no-op otherwise.
+purge_soft_deleted() {
+  az cognitiveservices account list-deleted -o tsv \
+    --query "[?name=='$AOAI'].[name,location]" 2>/dev/null | while read -r n l; do
+      [ -n "$n" ] || continue
+      echo "    purging soft-deleted $n ($l) ..."
+      az cognitiveservices account purge -n "$n" -g "${RG:-agent-chat-rg}" -l "$l" -o none 2>/dev/null || true
+  done
+}
+
+# --- clean mode: tear everything down, then exit --------------------------
+if [ "$MODE" = "clean" ] || [ "$MODE" = "--clean" ]; then
+  RG=agent-chat-rg
+  say "Deleting resource group '$RG' (waits until gone) ..."
+  az group delete -n "$RG" --yes 2>/dev/null || true
+  say "Purging soft-deleted Azure OpenAI accounts ..."
+  purge_soft_deleted
+  say "Clean. Now run:  bash deploy.sh"
+  exit 0
+fi
 
 # --- 1. settings (press Enter for [default]) ------------------------------
 read -rp "Resource group [agent-chat-rg]: " RG;  RG=${RG:-agent-chat-rg}
@@ -23,9 +50,7 @@ APP=agent-chat-ui
 ENVNAME=agent-chat-env
 DEPLOY_NAME=chat               # must match azure/chat in litellm.config.yaml
 API_VERSION=2024-10-21
-SUFFIX=$(az account show --query id -o tsv | tr -d '-' | cut -c1-10)
 ACR=acragentchat$SUFFIX        # globally unique, lowercase, no hyphens
-AOAI=aoai-agentchat-$SUFFIX    # globally unique Azure OpenAI resource
 MASTER_KEY="sk-$(openssl rand -hex 16)"
 
 cat <<EOF
@@ -61,9 +86,13 @@ az group create -n "$RG" -l "$LOC" -o none
 
 # --- 4. Azure OpenAI resource + model deployment --------------------------
 say "Azure OpenAI resource ..."
-az cognitiveservices account show -n "$AOAI" -g "$RG" -o none 2>/dev/null || \
+if ! az cognitiveservices account show -n "$AOAI" -g "$RG" -o none 2>/dev/null; then
+  # Self-heal: a same-named account soft-deleted by an earlier teardown blocks
+  # creation with "already exists". Purge it first, then create.
+  purge_soft_deleted
   az cognitiveservices account create -n "$AOAI" -g "$RG" -l "$LOC" \
     --kind OpenAI --sku S0 --custom-domain "$AOAI" --yes -o none
+fi
 
 say "Selecting a current (non-deprecated) chat model in $LOC ..."
 MODELS_JSON=$(az cognitiveservices account list-models -n "$AOAI" -g "$RG" -o json)
@@ -155,7 +184,7 @@ cat <<EOF
 
      https://$FQDN
 
- Tear it all down later with:
-     az group delete -n $RG --yes --no-wait
+ Tear it all down later (deletes resources AND purges OpenAI) with:
+     bash deploy.sh clean
 ============================================================
 EOF
