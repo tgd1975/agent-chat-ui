@@ -18,12 +18,15 @@ model_list:
       api_base: https://llm-farm.internal/v1
       api_key: os.environ/FARM_API_KEY
 
-  # Third route — an Azure / Copilot-style endpoint.
+  # Third route — Azure OpenAI (Copilot-style). For Azure, the part after
+  # "azure/" is the *deployment name* you created in the Azure portal/CLI,
+  # not the base model name. Set AGENT_MODEL=copilot to use this route.
   - model_name: copilot
     litellm_params:
-      model: azure/gpt-4o
+      model: azure/os.environ/AZURE_DEPLOYMENT   # e.g. gpt-4o deployment name
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
+      api_version: os.environ/AZURE_API_VERSION
 
 litellm_settings:
   drop_params: true        # silently drop params a given provider doesn't support

@@ -22,6 +22,12 @@ chainlit run app.py -w                              # terminal 2 -> http://local
 
 The MCP server (`mcp/server.py`) is spawned automatically by the SDK over stdio.
 
+## Run in the cloud (Azure)
+
+To host the UI on a public HTTPS URL with **Azure OpenAI** behind the LiteLLM
+proxy, see **[DEPLOY-azure.md](DEPLOY-azure.md)** — it containerizes the stack
+(`Dockerfile` + `start.sh`) and deploys it to Azure Container Apps.
+
 ## Switching models
 
 Edit `litellm.config.yaml` to add routes, then set `AGENT_MODEL` in `.env` to a
