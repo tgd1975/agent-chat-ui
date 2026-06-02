@@ -2,8 +2,9 @@
 # One-shot Azure deploy for agent-chat-ui.
 #
 # Run inside Azure Cloud Shell (Bash), from the repo root:
-#     bash deploy.sh           # deploy (idempotent — safe to re-run)
-#     bash deploy.sh clean      # delete everything + purge soft-deleted OpenAI
+#     bash deploy.sh            # cleans up first, then deploys fresh
+#     bash deploy.sh clean       # only tear down + purge soft-deleted OpenAI
+#     SKIP_CLEAN=1 bash deploy.sh  # deploy without the upfront cleanup
 #
 # Cloud Shell is already logged in, so this script reads your Azure OpenAI key
 # itself — you never type or paste a secret. Press Enter to accept defaults.
@@ -31,13 +32,18 @@ purge_soft_deleted() {
   done
 }
 
+# Full teardown: delete the resource group (blocking) + purge soft-deleted.
+do_clean() {
+  say "Cleanup: deleting resource group '$RG' (waits until gone) ..."
+  az group delete -n "$RG" --yes 2>/dev/null || true
+  say "Cleanup: purging soft-deleted Azure OpenAI accounts ..."
+  purge_soft_deleted
+}
+
 # --- clean mode: tear everything down, then exit --------------------------
 if [ "$MODE" = "clean" ] || [ "$MODE" = "--clean" ]; then
   RG=agent-chat-rg
-  say "Deleting resource group '$RG' (waits until gone) ..."
-  az group delete -n "$RG" --yes 2>/dev/null || true
-  say "Purging soft-deleted Azure OpenAI accounts ..."
-  purge_soft_deleted
+  do_clean
   say "Clean. Now run:  bash deploy.sh"
   exit 0
 fi
@@ -62,6 +68,13 @@ Plan:
   Container App  : $APP
 EOF
 read -rp "Proceed? [Y/n]: " GO; case "${GO:-Y}" in [nN]*) echo "aborted"; exit 0;; esac
+
+# --- always start clean (set SKIP_CLEAN=1 to keep existing resources) -----
+if [ "${SKIP_CLEAN:-0}" = "1" ]; then
+  say "SKIP_CLEAN=1 set — keeping existing resources."
+else
+  do_clean
+fi
 
 # --- 2. providers + extension --------------------------------------------
 say "Registering resource providers (idempotent) ..."
