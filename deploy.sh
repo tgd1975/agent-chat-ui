@@ -21,23 +21,41 @@ say "Subscription: $(az account show --query name -o tsv)"
 SUFFIX=$(az account show --query id -o tsv | tr -d '-' | cut -c1-10)
 AOAI=aoai-agentchat-$SUFFIX    # globally unique Azure OpenAI resource
 
-# Purge any soft-deleted Azure OpenAI accounts left from earlier runs (the
-# thing that makes re-runs hang with "already exists"). Safe no-op otherwise.
+# Purge soft-deleted Azure OpenAI accounts left from earlier runs (the thing
+# that makes re-runs hang with "already exists"). Prefix match catches both the
+# old random-named and the new deterministic accounts. Errors are shown.
 purge_soft_deleted() {
-  az cognitiveservices account list-deleted -o tsv \
-    --query "[?name=='$AOAI'].[name,location]" 2>/dev/null | while read -r n l; do
-      [ -n "$n" ] || continue
-      echo "    purging soft-deleted $n ($l) ..."
-      az cognitiveservices account purge -n "$n" -g "${RG:-agent-chat-rg}" -l "$l" -o none 2>/dev/null || true
+  local rows n l rg
+  rows=$(az cognitiveservices account list-deleted -o tsv \
+    --query "[?starts_with(name,'aoai-agentchat')].[name,location,resourceGroup]" 2>/dev/null || true)
+  [ -z "$rows" ] && return 0
+  printf '%s\n' "$rows" | while IFS=$'\t' read -r n l rg; do
+    [ -n "$n" ] || continue
+    echo "    purging soft-deleted $n ($l) ..."
+    az cognitiveservices account purge -n "$n" -l "$l" -g "${rg:-${RG:-agent-chat-rg}}" -o none \
+      || echo "    !! purge failed. Run manually: az cognitiveservices account purge -n $n -l $l -g ${rg:-${RG:-agent-chat-rg}}"
   done
 }
 
-# Full teardown: delete the resource group (blocking) + purge soft-deleted.
+# How many of our soft-deleted accounts remain (for retry/verify).
+count_soft_deleted() {
+  az cognitiveservices account list-deleted -o tsv \
+    --query "[?starts_with(name,'aoai-agentchat')].name" 2>/dev/null | grep -c . || true
+}
+
+# Full teardown: delete the resource group (blocking) + purge soft-deleted,
+# retrying because the account takes a moment to register as soft-deleted.
 do_clean() {
   say "Cleanup: deleting resource group '$RG' (waits until gone) ..."
   az group delete -n "$RG" --yes 2>/dev/null || true
   say "Cleanup: purging soft-deleted Azure OpenAI accounts ..."
-  purge_soft_deleted
+  local i
+  for i in 1 2 3 4 5; do
+    purge_soft_deleted
+    [ "$(count_soft_deleted)" = "0" ] && { echo "    purge complete."; return 0; }
+    echo "    not gone yet; retrying in 10s ($i/5) ..."; sleep 10
+  done
+  echo "    NOTE: a soft-deleted account is still listed. Tell me and I'll give you the exact purge command."
 }
 
 # --- clean mode: tear everything down, then exit --------------------------
