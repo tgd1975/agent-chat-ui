@@ -19,11 +19,11 @@ model_list:
       api_key: os.environ/FARM_API_KEY
 
   # Third route — Azure OpenAI (Copilot-style). The part after "azure/" is the
-  # *deployment name* you create in Azure (deploy.sh creates one named gpt-4o).
-  # Set AGENT_MODEL=copilot to use this route.
+  # Azure *deployment name* (deploy.sh creates one literally named "chat" and
+  # auto-picks whatever current chat model is available). Set AGENT_MODEL=copilot.
   - model_name: copilot
     litellm_params:
-      model: azure/gpt-4o
+      model: azure/chat
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: os.environ/AZURE_API_VERSION

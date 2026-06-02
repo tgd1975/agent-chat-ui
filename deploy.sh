@@ -21,20 +21,18 @@ read -rp "Location       [eastus]: "        LOC; LOC=${LOC:-eastus}
 
 APP=agent-chat-ui
 ENVNAME=agent-chat-env
-DEPLOY_NAME=gpt-4o              # must match azure/gpt-4o in litellm.config.yaml
-MODEL=gpt-4o
-MODEL_VERSION=2024-08-06
+DEPLOY_NAME=chat               # must match azure/chat in litellm.config.yaml
 API_VERSION=2024-10-21
-RND=$(openssl rand -hex 4)
-ACR=acragentchat$RND           # globally unique, lowercase
-AOAI=aoai-agentchat-$RND       # globally unique Azure OpenAI resource
+SUFFIX=$(az account show --query id -o tsv | tr -d '-' | cut -c1-10)
+ACR=acragentchat$SUFFIX        # globally unique, lowercase, no hyphens
+AOAI=aoai-agentchat-$SUFFIX    # globally unique Azure OpenAI resource
 MASTER_KEY="sk-$(openssl rand -hex 16)"
 
 cat <<EOF
 
 Plan:
   Resource group : $RG ($LOC)
-  Azure OpenAI   : $AOAI  ->  deployment '$DEPLOY_NAME' ($MODEL $MODEL_VERSION)
+  Azure OpenAI   : $AOAI  ->  deployment '$DEPLOY_NAME' (model auto-selected)
   Registry       : $ACR
   Container App  : $APP
 EOF
@@ -67,18 +65,40 @@ az cognitiveservices account show -n "$AOAI" -g "$RG" -o none 2>/dev/null || \
   az cognitiveservices account create -n "$AOAI" -g "$RG" -l "$LOC" \
     --kind OpenAI --sku S0 --custom-domain "$AOAI" --yes -o none
 
-say "Model deployment '$DEPLOY_NAME' ..."
+say "Selecting a current (non-deprecated) chat model in $LOC ..."
+MODELS_JSON=$(az cognitiveservices account list-models -n "$AOAI" -g "$RG" -o json)
+TODAY=$(date -u +%Y-%m-%d)
+SEL=$(echo "$MODELS_JSON" | jq -r --arg today "$TODAY" '
+  [ .[]
+    | select(.format=="OpenAI")
+    | select((.capabilities.chatCompletion // "false")=="true")
+    | select(((.lifecycleStatus // "")|test("Deprecat"))|not)
+    | select(((.deprecation.inference // "9999-12-31")[0:10]) > $today) ] as $m
+  | (["gpt-4o","gpt-4o-mini","gpt-4.1","gpt-4.1-mini","gpt-35-turbo"]) as $pref
+  | ( [ $pref[] as $p | $m[] | select(.name==$p) ] + $m )
+  | .[0] // empty | "\(.name) \(.version)"')
+MODEL=${SEL%% *}; MODEL_VERSION=${SEL##* }
+[ -n "$MODEL" ] && [ "$MODEL" != "$MODEL_VERSION" ] || {
+  echo "!! No available chat model found in $LOC. Re-run and pick another Location"
+  echo "   (try: swedencentral, westus, eastus2)."; exit 1; }
+say "Chosen model: $MODEL ($MODEL_VERSION)"
+
+# Pick a deployment SKU the model actually offers, by preference.
+AVAIL_SKUS=$(echo "$MODELS_JSON" | jq -r --arg n "$MODEL" --arg v "$MODEL_VERSION" \
+  '.[]|select(.name==$n and .version==$v)|.skus[]?.name')
+SKU=GlobalStandard
+for s in GlobalStandard Standard DataZoneStandard GlobalProvisionedManaged; do
+  echo "$AVAIL_SKUS" | grep -qx "$s" && { SKU=$s; break; }
+done
+
+say "Model deployment '$DEPLOY_NAME' ($MODEL $MODEL_VERSION, $SKU) ..."
 if ! az cognitiveservices account deployment show -n "$AOAI" -g "$RG" --deployment-name "$DEPLOY_NAME" -o none 2>/dev/null; then
   az cognitiveservices account deployment create -n "$AOAI" -g "$RG" \
       --deployment-name "$DEPLOY_NAME" --model-name "$MODEL" \
       --model-version "$MODEL_VERSION" --model-format OpenAI \
-      --sku-name GlobalStandard --sku-capacity 10 -o none 2>/tmp/dep.err || \
-  az cognitiveservices account deployment create -n "$AOAI" -g "$RG" \
-      --deployment-name "$DEPLOY_NAME" --model-name "$MODEL" \
-      --model-version "$MODEL_VERSION" --model-format OpenAI \
-      --sku-name Standard --sku-capacity 10 -o none 2>>/tmp/dep.err || {
+      --sku-name "$SKU" --sku-capacity 10 -o none 2>/tmp/dep.err || {
         echo; echo "!! Model deployment failed:"; sed 's/^/   /' /tmp/dep.err
-        echo "   This is usually region quota. Re-run ./deploy.sh and choose a"
+        echo "   This is usually region quota. Re-run bash deploy.sh and choose a"
         echo "   different Location (try: swedencentral, westus, eastus2)."
         exit 1; }
 fi
