@@ -1,0 +1,32 @@
+# LiteLLM proxy config — the "configurable LLM" knob.
+# Exposes an Anthropic-compatible /v1/messages endpoint on :4000.
+# Switch models by setting AGENT_MODEL (in .env) to one of the model_name values.
+#
+#   litellm --config litellm.config.yaml --port 4000
+
+model_list:
+  # Default route — real Claude. Keep this as the default for best skill/tool fidelity.
+  - model_name: claude-default
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Second route — an OpenAI-compatible "LLM farm" / internal endpoint.
+  - model_name: farm-gpt
+    litellm_params:
+      model: openai/your-farm-model
+      api_base: https://llm-farm.internal/v1
+      api_key: os.environ/FARM_API_KEY
+
+  # Third route — an Azure / Copilot-style endpoint.
+  - model_name: copilot
+    litellm_params:
+      model: azure/gpt-4o
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+
+litellm_settings:
+  drop_params: true        # silently drop params a given provider doesn't support
+
+general_settings:
+  master_key: os.environ/ANTHROPIC_AUTH_TOKEN   # clients authenticate with this

@@ -1,0 +1,17 @@
+# env / secrets
+.env
+*.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# chainlit
+.chainlit/
+.files/
+
+# os
+.DS_Store
