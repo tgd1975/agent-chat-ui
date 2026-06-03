@@ -69,7 +69,7 @@ fi
 
 # --- 1. settings (press Enter for [default]) ------------------------------
 read -rp "Resource group [agent-chat-rg]: " RG;  RG=${RG:-agent-chat-rg}
-read -rp "Location       [eastus]: "        LOC; LOC=${LOC:-eastus}
+read -rp "Location       [eastus2]: "       LOC; LOC=${LOC:-eastus2}
 
 APP=agent-chat-ui
 ENVNAME=agent-chat-env
