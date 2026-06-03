@@ -149,7 +149,7 @@ SEL=$(echo "$MODELS_JSON" | jq -r --arg today "$TODAY" '
     | select((.capabilities.chatCompletion // "false")=="true")
     | select(((.lifecycleStatus // "")|test("Deprecat"))|not)
     | select(((.deprecation.inference // "9999-12-31")[0:10]) > $today) ] as $m
-  | (["gpt-4o","gpt-4o-mini","gpt-4.1","gpt-4.1-mini","gpt-35-turbo"]) as $pref
+  | (["gpt-4o-mini","gpt-4.1-mini","gpt-35-turbo","gpt-4o","gpt-4.1"]) as $pref
   | ( [ $pref[] as $p | $m[] | select(.name==$p) ] + $m )
   | .[0] // empty | "\(.name) \(.version)"')
 MODEL=${SEL%% *}; MODEL_VERSION=${SEL##* }
@@ -168,14 +168,29 @@ done
 
 say "Model deployment '$DEPLOY_NAME' ($MODEL $MODEL_VERSION, $SKU) ..."
 if ! az cognitiveservices account deployment show -n "$AOAI" -g "$RG" --deployment-name "$DEPLOY_NAME" -o none 2>/dev/null; then
-  az cognitiveservices account deployment create -n "$AOAI" -g "$RG" \
-      --deployment-name "$DEPLOY_NAME" --model-name "$MODEL" \
-      --model-version "$MODEL_VERSION" --model-format OpenAI \
-      --sku-name "$SKU" --sku-capacity 10 -o none 2>/tmp/dep.err || {
-        echo; echo "!! Model deployment failed:"; sed 's/^/   /' /tmp/dep.err
-        echo "   This is usually region quota. Re-run bash deploy.sh and choose a"
-        echo "   different Location (try: swedencentral, westus, eastus2)."
-        exit 1; }
+  # Step the capacity down (10k -> 1k TPM) so it fits even tiny trial quotas.
+  DEPLOYED=0
+  for CAP in ${DEPLOY_CAP:-10 5 2 1}; do
+    if az cognitiveservices account deployment create -n "$AOAI" -g "$RG" \
+        --deployment-name "$DEPLOY_NAME" --model-name "$MODEL" \
+        --model-version "$MODEL_VERSION" --model-format OpenAI \
+        --sku-name "$SKU" --sku-capacity "$CAP" -o none 2>/tmp/dep.err; then
+      say "Deployed '$MODEL' at ${CAP}k TPM."; DEPLOYED=1; break
+    fi
+    if grep -qiE 'quota|capacity|exceed' /tmp/dep.err; then
+      echo "    ${CAP}k TPM exceeds quota, trying smaller ..."; continue
+    fi
+    break   # a non-quota error: stop and report it
+  done
+  if [ "$DEPLOYED" != 1 ]; then
+    echo; echo "!! Model deployment failed:"; sed 's/^/   /' /tmp/dep.err
+    if grep -qiE 'quota|capacity|exceed' /tmp/dep.err; then
+      echo "   Even 1k TPM doesn't fit — your subscription has ~0 model quota here."
+      echo "   Either request a quota increase (Azure Portal > Quotas > Cognitive"
+      echo "   Services, model '$MODEL'), or try another Location (e.g. eastus2)."
+    fi
+    exit 1
+  fi
 fi
 
 AZURE_API_BASE=$(az cognitiveservices account show -n "$AOAI" -g "$RG" --query properties.endpoint -o tsv)
