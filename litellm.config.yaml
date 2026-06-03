@@ -35,6 +35,16 @@ model_list:
       model: ollama_chat/llama3.2
       api_base: os.environ/OLLAMA_BASE_URL   # e.g. http://ollama:11434
 
+  # Fifth route — GitHub Models: use GPT-4o(-mini) etc. with a GitHub Personal
+  # Access Token (fine-grained token with the "Models" permission). This is the
+  # legitimate, API-based way to use models via your GitHub account. It is NOT
+  # the Copilot editor subscription (repurposing that is against GitHub's terms).
+  # Free dev tier is rate-limited but fine for a feasibility test. AGENT_MODEL=github.
+  - model_name: github
+    litellm_params:
+      model: github/gpt-4o-mini      # or github/gpt-4o for the bigger model
+      api_key: os.environ/GITHUB_API_KEY
+
 litellm_settings:
   drop_params: true        # silently drop params a given provider doesn't support
 

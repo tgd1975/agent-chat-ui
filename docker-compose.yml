@@ -1,53 +1,28 @@
-# Fully local stack — no cloud, no API keys.
+# Local stack using GitHub Models as the LLM backend.
 #
-#   docker compose up --build
-#   -> open http://localhost:8000
+#   1) cp .env.example .env   and put your GitHub token in GITHUB_API_KEY
+#   2) docker compose up --build
+#   3) open http://localhost:8000
 #
-# Pieces:
-#   ollama      local LLM server (runs llama3.2)
-#   ollama-pull one-shot: downloads the model, then exits
-#   app         our image (LiteLLM proxy + Chainlit + Claude Agent SDK)
-#
-# The agent talks to LiteLLM (ANTHROPIC_BASE_URL), which routes to Ollama.
+# One container runs LiteLLM (:4000) + Chainlit (:8000) + the Claude Agent SDK.
+# LiteLLM routes to GitHub Models (api authenticated with your GitHub PAT).
 services:
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  ollama-pull:
-    image: curlimages/curl:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
-    # Pull the model via Ollama's HTTP API, then exit. Change llama3.2 here AND
-    # in litellm.config.yaml (the ollama route) if you want a different model.
-    entrypoint: ["sh", "-c", "curl -s http://ollama:11434/api/pull -d '{\"name\":\"llama3.2\"}' && echo done"]
-    restart: "no"
-
   app:
     build: .
-    depends_on:
-      ollama-pull:
-        condition: service_completed_successfully
+    env_file:
+      - .env                                  # provides GITHUB_API_KEY
     environment:
-      ANTHROPIC_BASE_URL: http://localhost:4000      # LiteLLM (same container)
-      ANTHROPIC_AUTH_TOKEN: sk-local-master          # must match litellm master_key
-      AGENT_MODEL: ollama                            # the LiteLLM route to use
-      OLLAMA_BASE_URL: http://ollama:11434           # where the model server lives
+      ANTHROPIC_BASE_URL: http://localhost:4000   # LiteLLM (same container)
+      ANTHROPIC_AUTH_TOKEN: sk-local-master       # must match litellm master_key
+      AGENT_MODEL: github                         # the LiteLLM route -> GitHub Models
       # Dummies so LiteLLM loads the other (unused) routes without complaint:
       ANTHROPIC_API_KEY: unused
       FARM_API_KEY: unused
+      FARM_API_BASE: http://unused
+      FARM_MODEL: openai/unused
       AZURE_API_KEY: unused
       AZURE_API_BASE: http://unused
       AZURE_API_VERSION: "2024-10-21"
+      OLLAMA_BASE_URL: http://unused:11434
     ports:
       - "8000:8000"
-
-volumes:
-  ollama:

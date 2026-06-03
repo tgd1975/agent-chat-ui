@@ -22,12 +22,13 @@ chainlit run app.py -w                              # terminal 2 -> http://local
 
 The MCP server (`mcp/server.py`) is spawned automatically by the SDK over stdio.
 
-## Run locally in Docker (no cloud, no API key)
+## Run locally in Docker (GitHub Models)
 
-The fastest way to try the whole stack — uses a **local LLM** (Ollama), so no
-keys or quotas. See **[LOCAL.md](LOCAL.md)**:
+The fastest way to try the whole stack — uses **GitHub Models** (GPT-4o-mini via
+your GitHub token), no Azure/quota. See **[LOCAL.md](LOCAL.md)**:
 
 ```bash
+cp .env.example .env           # set GITHUB_API_KEY=github_pat_...
 docker compose up --build      # -> http://localhost:8000
 ```
 

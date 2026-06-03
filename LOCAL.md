@@ -1,48 +1,50 @@
-# Run locally in Docker (no cloud, no API key)
+# Run locally in Docker (GitHub Models backend)
 
-This runs the whole stack on your machine with a **local LLM** (Ollama), so
-there are no Azure/OpenAI keys and no quotas involved — ideal for a
-tech-feasibility test.
+Runs the whole stack on your machine and uses **GitHub Models** as the LLM —
+i.e. GPT-4o(-mini) via your GitHub account, authenticated with a Personal
+Access Token. No Azure, no quota requests.
 
 ```
 Browser → http://localhost:8000
-            └─ Chainlit → Claude Agent SDK → LiteLLM (:4000) → Ollama (llama3.2)
+            └─ Chainlit → Claude Agent SDK → LiteLLM (:4000) → GitHub Models (gpt-4o-mini)
 ```
 
-## Prerequisites
+> Note: this is **GitHub Models** (a GitHub API product), not the Copilot editor
+> subscription. Using your Copilot editor seat to power a standalone app is
+> against GitHub's terms; GitHub Models is the supported, API-based equivalent.
+> The free dev tier is rate-limited but fine for a feasibility test.
 
-- Docker Desktop / Docker Engine with the Compose plugin
-- ~4 GB free RAM and ~3 GB disk (for the model)
+## 1. Get a token
 
-## Start
+1. GitHub → **Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens → Generate new token**.
+2. Under **Permissions → Account permissions**, set **Models: Read-only**.
+3. Generate and copy the token (`github_pat_…`).
+
+## 2. Configure
 
 ```bash
-docker compose up --build
+cp .env.example .env
+# edit .env and set:  GITHUB_API_KEY=github_pat_...
 ```
 
-What happens:
-1. `ollama` starts, `ollama-pull` downloads **llama3.2** once (a few minutes the
-   first time), then the `app` image builds and boots LiteLLM + Chainlit.
-2. Open **http://localhost:8000** and chat.
-
-Stop with `Ctrl+C`; remove everything (including the model volume) with:
+## 3. Run
 
 ```bash
-docker compose down -v
+docker compose up --build      # -> http://localhost:8000
 ```
+
+The single container builds, starts LiteLLM + Chainlit, and you can chat.
+Stop with `Ctrl+C`; remove with `docker compose down`.
 
 ## Notes
 
-- **First run is slow** (model download + image build). Later runs are fast; the
-  model is cached in the `ollama` volume.
-- **Smaller/faster model?** For low-RAM machines use `llama3.2:1b`. Change it in
-  **two** places: the `ollama-pull` command in `docker-compose.yml` and the
-  `ollama` route's `model:` in `litellm.config.yaml`, then `docker compose up --build`.
-- **Tool/skill fidelity** on a small local model is limited — it's enough to prove
-  the pipeline (UI → Agent SDK → LiteLLM → model) works end to end. For full
-  Skill/MCP fidelity you'd point the same setup at a real Claude key by setting
-  `AGENT_MODEL=claude-default` and `ANTHROPIC_API_KEY=...` instead of Ollama.
-- **GPU:** the compose uses CPU by default (works everywhere). To use an NVIDIA
-  GPU, add a `deploy.resources.reservations.devices` GPU block to the `ollama`
-  service.
-```
+- **Model:** defaults to `gpt-4o-mini` (reliable on the free tier). For the bigger
+  model, change the `github` route in `litellm.config.yaml` to `github/gpt-4o`.
+- **Rate limits:** the free GitHub Models tier has low per-minute limits. If you
+  see 429s, wait a moment or switch to `gpt-4o-mini`. It's enough to prove the
+  pipeline (UI → Agent SDK → LiteLLM → model) works.
+- **Other backends:** the same image supports Anthropic, an internal OpenAI-
+  compatible LLM farm (`farm-gpt`), Azure (`copilot`), or a local model
+  (`ollama`) — just change `AGENT_MODEL` and the matching keys in `.env` /
+  `docker-compose.yml`.
