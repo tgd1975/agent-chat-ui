@@ -69,7 +69,6 @@ fi
 
 # --- 1. settings (press Enter for [default]) ------------------------------
 read -rp "Resource group [agent-chat-rg]: " RG;  RG=${RG:-agent-chat-rg}
-read -rp "Location       [eastus2]: "       LOC; LOC=${LOC:-eastus2}
 
 APP=agent-chat-ui
 ENVNAME=agent-chat-env
@@ -77,14 +76,18 @@ DEPLOY_NAME=chat               # must match azure/chat in litellm.config.yaml
 API_VERSION=2024-10-21
 ACR=acragentchat$SUFFIX        # globally unique, lowercase, no hyphens
 MASTER_KEY="sk-$(openssl rand -hex 16)"
+INFRA_LOC=${INFRA_LOC:-eastus2}   # where RG/ACR/Container App live (region-independent)
+# Regions tried, in order, for the OpenAI account + model. First with quota wins.
+# Override with:  REGIONS="eastus westus3" bash deploy.sh
+REGIONS=${REGIONS:-"eastus2 eastus westus3 westus southcentralus northcentralus swedencentral westeurope uksouth switzerlandnorth norwayeast polandcentral japaneast australiaeast canadaeast southindia"}
 
 cat <<EOF
 
 Plan:
-  Resource group : $RG ($LOC)
-  Azure OpenAI   : $AOAI  ->  deployment '$DEPLOY_NAME' (model auto-selected)
-  Registry       : $ACR
-  Container App  : $APP
+  Resource group : $RG ($INFRA_LOC)
+  Azure OpenAI   : brute-force across regions until one has quota
+  Deployment     : '$DEPLOY_NAME' (cheapest available model, auto)
+  Registry       : $ACR   |   Container App: $APP
 EOF
 read -rp "Proceed? [Y/n]: " GO; case "${GO:-Y}" in [nN]*) echo "aborted"; exit 0;; esac
 
@@ -114,86 +117,83 @@ wait_provider Microsoft.App
 
 # --- 3. resource group ----------------------------------------------------
 say "Resource group ..."
-az group create -n "$RG" -l "$LOC" -o none
+az group create -n "$RG" -l "$INFRA_LOC" -o none
 
-# --- 4. Azure OpenAI resource + model deployment --------------------------
-say "Azure OpenAI resource ..."
-if ! az cognitiveservices account show -n "$AOAI" -g "$RG" -o none 2>/dev/null; then
-  # Self-heal: a same-named account soft-deleted by an earlier teardown blocks
-  # creation. Purge any of ours first, then create.
-  purge_soft_deleted
-  if ! az cognitiveservices account create -n "$AOAI" -g "$RG" -l "$LOC" \
-        --kind OpenAI --sku S0 --custom-domain "$AOAI" --yes -o none 2>/tmp/aoai.err; then
-    echo; echo "!! Could not create the Azure OpenAI resource:"; sed 's/^/   /' /tmp/aoai.err
-    if grep -qi 'quota' /tmp/aoai.err; then
-      echo
-      echo "   Region '$LOC' is out of Azure OpenAI quota for your subscription —"
-      echo "   usually leftover soft-deleted accounts from earlier attempts that"
-      echo "   still hold the slot (they self-purge after ~48h)."
-      echo "   >> Easiest fix: re-run 'bash deploy.sh' and pick a DIFFERENT region:"
-      echo "        swedencentral   (EU, recommended)"
-      echo "        westeurope | eastus2 | eastus"
-      LEFT=$(az cognitiveservices account list-deleted -o tsv --query "[?location=='$LOC'].name" 2>/dev/null || true)
-      [ -n "$LEFT" ] && { echo "   Soft-deleted accounts still in '$LOC':"; printf '%s\n' "$LEFT" | sed 's/^/        /'; }
-    fi
-    exit 1
-  fi
-fi
-
-say "Listing available chat models in $LOC ..."
-MODELS_JSON=$(az cognitiveservices account list-models -n "$AOAI" -g "$RG" -o json)
+# --- 4. Azure OpenAI: brute-force across regions until one has quota -------
 TODAY=$(date -u +%Y-%m-%d)
-# Candidate list: one (latest) version per model, cheapest first. We then try
-# each in turn until one actually deploys — for a feasibility test we just want
-# *any* working LLM, so this maximizes the chance something lands.
-CANDIDATES=$(echo "$MODELS_JSON" | jq -r --arg today "$TODAY" '
-  def rank($n): (["gpt-4o-mini","gpt-4.1-mini","gpt-35-turbo","gpt-4o","gpt-4.1"]|index($n)) // 999;
-  [ .[]
-    | select(.format=="OpenAI")
-    | select((.capabilities.chatCompletion // "false")=="true")
-    | select(((.lifecycleStatus // "")|test("Deprecat"))|not)
-    | select(((.deprecation.inference // "9999-12-31")[0:10]) > $today) ]
-  | group_by(.name) | map(max_by(.version))
-  | sort_by(rank(.name), .name)
-  | .[] | "\(.name)\t\(.version)\t\(.skus|map(.name)|join(","))"')
-[ -n "$CANDIDATES" ] || {
-  echo "!! No chat model available in $LOC. Re-run and pick another Location"
-  echo "   (try: swedencentral, westus, eastus2)."; exit 1; }
 
-DEPLOYED=0
-while IFS=$'\t' read -r MODEL MODEL_VERSION SKUS; do
-  [ -n "$MODEL" ] || continue
-  SKU=GlobalStandard
-  for s in GlobalStandard Standard DataZoneStandard GlobalProvisionedManaged; do
-    case ",$SKUS," in *",$s,"*) SKU=$s; break;; esac
-  done
-  say "Trying $MODEL ($MODEL_VERSION, $SKU) as deployment '$DEPLOY_NAME' ..."
-  for CAP in ${DEPLOY_CAP:-10 5 2 1}; do
-    if az cognitiveservices account deployment create -n "$AOAI" -g "$RG" \
-        --deployment-name "$DEPLOY_NAME" --model-name "$MODEL" \
-        --model-version "$MODEL_VERSION" --model-format OpenAI \
-        --sku-name "$SKU" --sku-capacity "$CAP" -o none 2>/tmp/dep.err; then
-      say "Deployed $MODEL at ${CAP}k TPM."; DEPLOYED=1; break
-    fi
-    grep -qiE 'quota|capacity|exceed' /tmp/dep.err \
-      && { echo "    ${CAP}k TPM too high here, trying smaller ..."; continue; }
-    echo "    $MODEL failed (non-quota); next model ..."; break
-  done
-  [ "$DEPLOYED" = 1 ] && break
-  echo "    no quota for $MODEL here; trying next cheapest model ..."
-done <<< "$CANDIDATES"
+# Stand up an OpenAI account + model in ONE region. On success sets
+# AZURE_API_BASE / AZURE_API_KEY / AOAI_LOC and returns 0; cleans up on failure.
+try_region() {
+  local region=$1 CANDIDATES MODEL MODEL_VERSION SKUS SKU s CAP
+  AOAI="aoai-agentchat-$(openssl rand -hex 4)"   # fresh name → no subdomain clash
+  printf '\n--- region: %s ---\n' "$region"
+  echo "  creating OpenAI account $AOAI ..."
+  if ! az cognitiveservices account create -n "$AOAI" -g "$RG" -l "$region" \
+        --kind OpenAI --sku S0 --custom-domain "$AOAI" --yes -o none 2>/tmp/aoai.err; then
+    if grep -qiE 'quota|capacity' /tmp/aoai.err; then echo "  no account quota in $region — skip."
+    else echo "  account create failed in $region:"; sed 's/^/    /' /tmp/aoai.err; fi
+    return 1
+  fi
+  CANDIDATES=$(az cognitiveservices account list-models -n "$AOAI" -g "$RG" -o json 2>/dev/null \
+    | jq -r --arg today "$TODAY" '
+      def rank($n): (["gpt-4o-mini","gpt-4.1-mini","gpt-35-turbo","gpt-4o","gpt-4.1"]|index($n)) // 999;
+      [ .[] | select(.format=="OpenAI")
+        | select((.capabilities.chatCompletion // "false")=="true")
+        | select(((.lifecycleStatus // "")|test("Deprecat"))|not)
+        | select(((.deprecation.inference // "9999-12-31")[0:10]) > $today) ]
+      | group_by(.name) | map(max_by(.version)) | sort_by(rank(.name), .name)
+      | .[] | "\(.name)\t\(.version)\t\(.skus|map(.name)|join(","))"' 2>/dev/null || true)
+  if [ -n "$CANDIDATES" ]; then
+    while IFS=$'\t' read -r MODEL MODEL_VERSION SKUS; do
+      [ -n "$MODEL" ] || continue
+      SKU=GlobalStandard
+      for s in GlobalStandard Standard DataZoneStandard GlobalProvisionedManaged; do
+        case ",$SKUS," in *",$s,"*) SKU=$s; break;; esac
+      done
+      echo "  trying model $MODEL ($MODEL_VERSION, $SKU) ..."
+      for CAP in ${DEPLOY_CAP:-10 5 2 1}; do
+        if az cognitiveservices account deployment create -n "$AOAI" -g "$RG" \
+            --deployment-name "$DEPLOY_NAME" --model-name "$MODEL" \
+            --model-version "$MODEL_VERSION" --model-format OpenAI \
+            --sku-name "$SKU" --sku-capacity "$CAP" -o none 2>/tmp/dep.err; then
+          AZURE_API_BASE=$(az cognitiveservices account show -n "$AOAI" -g "$RG" --query properties.endpoint -o tsv)
+          AZURE_API_KEY=$(az cognitiveservices account keys list -n "$AOAI" -g "$RG" --query key1 -o tsv)
+          AOAI_LOC=$region
+          say "WORKED: $MODEL at ${CAP}k TPM in $region."
+          return 0
+        fi
+        grep -qiE 'quota|capacity|exceed' /tmp/dep.err \
+          && { echo "    ${CAP}k too high, smaller ..."; continue; }
+        echo "    $MODEL failed (non-quota); next model ..."; break
+      done
+    done <<< "$CANDIDATES"
+    echo "  no model quota in $region."
+  else
+    echo "  no usable chat model offered in $region."
+  fi
+  # Drop the just-created account so it doesn't sit on the region's quota.
+  az cognitiveservices account delete -n "$AOAI" -g "$RG" -o none 2>/dev/null || true
+  return 1
+}
 
-if [ "$DEPLOYED" != 1 ]; then
-  echo; echo "!! Could not deploy ANY model in $LOC:"; sed 's/^/   /' /tmp/dep.err
-  echo "   Your subscription has ~0 model quota in this region. Either request an"
-  echo "   increase (Azure Portal > Quotas > Cognitive Services), or try another"
-  echo "   Location (e.g. eastus2, westus, swedencentral)."
+say "Brute-forcing Azure OpenAI across regions (first with quota wins) ..."
+FOUND=0
+for R in $REGIONS; do
+  if try_region "$R"; then FOUND=1; break; fi
+done
+if [ "$FOUND" != 1 ]; then
+  echo
+  echo "!! No region had quota for an Azure OpenAI model."
+  echo "   That points to a SUBSCRIPTION-level limit, not a regional one —"
+  echo "   free/trial subscriptions commonly get 0 Azure OpenAI quota."
+  N=$(az cognitiveservices account list-deleted -o tsv --query "length([?starts_with(name,'aoai-agentchat')])" 2>/dev/null || echo "?")
+  echo "   ($N soft-deleted leftover account(s) may still hold quota; they clear in ~48h.)"
+  echo "   Fixes: upgrade to Pay-as-you-go, or request an Azure OpenAI quota"
+  echo "   increase (Portal > Quotas > Cognitive Services)."
   exit 1
 fi
-
-AZURE_API_BASE=$(az cognitiveservices account show -n "$AOAI" -g "$RG" --query properties.endpoint -o tsv)
-AZURE_API_KEY=$(az cognitiveservices account keys list -n "$AOAI" -g "$RG" --query key1 -o tsv)
-say "OpenAI endpoint: $AZURE_API_BASE"
+say "Using OpenAI in $AOAI_LOC — endpoint $AZURE_API_BASE"
 
 # --- 5. build image in Azure (no local Docker needed) ---------------------
 say "Container registry ..."
@@ -207,7 +207,7 @@ ACR_PASS=$(az acr credential show -n "$ACR" --query 'passwords[0].value' -o tsv)
 # --- 6. Container Apps env + the app --------------------------------------
 say "Container Apps environment ..."
 az containerapp env show -n "$ENVNAME" -g "$RG" -o none 2>/dev/null || \
-  az containerapp env create -n "$ENVNAME" -g "$RG" -l "$LOC" -o none
+  az containerapp env create -n "$ENVNAME" -g "$RG" -l "$INFRA_LOC" -o none
 
 ENVVARS=(
   ANTHROPIC_BASE_URL=http://localhost:4000
