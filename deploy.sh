@@ -115,10 +115,24 @@ az group create -n "$RG" -l "$LOC" -o none
 say "Azure OpenAI resource ..."
 if ! az cognitiveservices account show -n "$AOAI" -g "$RG" -o none 2>/dev/null; then
   # Self-heal: a same-named account soft-deleted by an earlier teardown blocks
-  # creation with "already exists". Purge it first, then create.
+  # creation. Purge any of ours first, then create.
   purge_soft_deleted
-  az cognitiveservices account create -n "$AOAI" -g "$RG" -l "$LOC" \
-    --kind OpenAI --sku S0 --custom-domain "$AOAI" --yes -o none
+  if ! az cognitiveservices account create -n "$AOAI" -g "$RG" -l "$LOC" \
+        --kind OpenAI --sku S0 --custom-domain "$AOAI" --yes -o none 2>/tmp/aoai.err; then
+    echo; echo "!! Could not create the Azure OpenAI resource:"; sed 's/^/   /' /tmp/aoai.err
+    if grep -qi 'quota' /tmp/aoai.err; then
+      echo
+      echo "   Region '$LOC' is out of Azure OpenAI quota for your subscription —"
+      echo "   usually leftover soft-deleted accounts from earlier attempts that"
+      echo "   still hold the slot (they self-purge after ~48h)."
+      echo "   >> Easiest fix: re-run 'bash deploy.sh' and pick a DIFFERENT region:"
+      echo "        swedencentral   (EU, recommended)"
+      echo "        westeurope | eastus2 | eastus"
+      LEFT=$(az cognitiveservices account list-deleted -o tsv --query "[?location=='$LOC'].name" 2>/dev/null || true)
+      [ -n "$LEFT" ] && { echo "   Soft-deleted accounts still in '$LOC':"; printf '%s\n' "$LEFT" | sed 's/^/        /'; }
+    fi
+    exit 1
+  fi
 fi
 
 say "Selecting a current (non-deprecated) chat model in $LOC ..."
