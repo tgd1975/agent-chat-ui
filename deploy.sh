@@ -19,7 +19,12 @@ az account show -o none 2>/dev/null || { echo "Not logged in. Run: az login"; ex
 say "Subscription: $(az account show --query name -o tsv)"
 
 SUFFIX=$(az account show --query id -o tsv | tr -d '-' | cut -c1-10)
-AOAI=aoai-agentchat-$SUFFIX    # globally unique Azure OpenAI resource
+# Fresh OpenAI account name each run: an Azure OpenAI subdomain stays reserved
+# for ~48h after a soft-delete, so reusing a fixed name triggers
+# "CustomDomainInUse". A new name per run sidesteps that; old ones are purged
+# best-effort during cleanup. (Endpoint + key are read dynamically, so the
+# changing name doesn't matter to the app.)
+AOAI=aoai-agentchat-$(openssl rand -hex 4)
 
 # Purge soft-deleted Azure OpenAI accounts (best effort, all of ours).
 purge_soft_deleted() {
