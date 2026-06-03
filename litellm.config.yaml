@@ -28,6 +28,13 @@ model_list:
       api_key: os.environ/AZURE_API_KEY
       api_version: os.environ/AZURE_API_VERSION
 
+  # Fourth route — a fully LOCAL model via Ollama (no cloud, no API key).
+  # Used by the docker-compose setup. Set AGENT_MODEL=ollama.
+  - model_name: ollama
+    litellm_params:
+      model: ollama_chat/llama3.2
+      api_base: os.environ/OLLAMA_BASE_URL   # e.g. http://ollama:11434
+
 litellm_settings:
   drop_params: true        # silently drop params a given provider doesn't support
 

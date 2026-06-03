@@ -22,6 +22,15 @@ chainlit run app.py -w                              # terminal 2 -> http://local
 
 The MCP server (`mcp/server.py`) is spawned automatically by the SDK over stdio.
 
+## Run locally in Docker (no cloud, no API key)
+
+The fastest way to try the whole stack — uses a **local LLM** (Ollama), so no
+keys or quotas. See **[LOCAL.md](LOCAL.md)**:
+
+```bash
+docker compose up --build      # -> http://localhost:8000
+```
+
 ## Run in the cloud (Azure)
 
 To host the UI on a public HTTPS URL with **Azure OpenAI** behind the LiteLLM
