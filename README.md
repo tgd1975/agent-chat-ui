@@ -1,15 +1,16 @@
 # agent-chat-ui
 
-A ChatGPT/Claude-style **web chat console in Python** that can use **Anthropic
-Agent Skills** and your **MCP servers**, with a **configurable LLM backend**.
+A ChatGPT-style **web chat console in Python** that uses **Agent Skills**
+(the open `SKILL.md` standard) and your **MCP servers**, over a **configurable,
+model-agnostic LLM backend**.
 
 Three pieces:
 
 | Layer | Tech | Role |
 |---|---|---|
 | **Web chat UI** | [Chainlit](https://chainlit.io) | Streaming ChatGPT-like front-end. |
-| **Agent engine** | [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview) | Runs the loop, loads **Skills** (`SKILL.md`), connects **MCP** servers. |
-| **LLM router** | [LiteLLM proxy](https://docs.litellm.ai/docs/simple_proxy) | Exposes an Anthropic-compatible `/v1/messages` endpoint and routes to Claude / an LLM farm / Copilot / local models. |
+| **Agent engine** | [Pydantic AI](https://ai.pydantic.dev) + [pydantic-ai-skills](https://pypi.org/project/pydantic-ai-skills/) | Model-agnostic loop; loads **Skills** (`SKILL.md`), connects **MCP** servers. Works with any model. |
+| **LLM router** | [LiteLLM proxy](https://docs.litellm.ai/docs/simple_proxy) | OpenAI-compatible endpoint; routes to GitHub Models / Mistral / Claude / Azure / local. |
 
 ## Quick start
 
@@ -20,7 +21,7 @@ litellm --config litellm.config.yaml --port 4000   # terminal 1
 chainlit run app.py -w                              # terminal 2 -> http://localhost:8000
 ```
 
-The MCP server (`mcp/server.py`) is spawned automatically by the SDK over stdio.
+The MCP server (`mcp/server.py`) is spawned automatically over stdio.
 
 ## Run locally in Docker (GitHub Models)
 
@@ -41,14 +42,18 @@ proxy, see **[DEPLOY-azure.md](DEPLOY-azure.md)** — it containerizes the stack
 ## Switching models
 
 Edit `litellm.config.yaml` to add routes, then set `AGENT_MODEL` in `.env` to a
-route's `model_name` (`claude-default`, `farm-gpt`, `copilot`). Restart the app.
+route's `model_name` (`github`, `ollama`, `claude-default`, `farm-gpt`,
+`copilot`). Restart the app. The agent talks to LiteLLM's OpenAI-compatible
+endpoint (`LLM_BASE_URL`), so the model is purely a routing choice.
 
 ## Note on Skills
 
-The exact knob for enabling Agent Skills in the Claude Agent SDK evolves between
-versions. This scaffold uses `setting_sources=["project"]` plus allowing the
-`Skill` tool, which is the current convention — pin the SDK version and verify
-against its docs.
+Agent Skills (`SKILL.md`) are an **open standard** (published Dec 2025), so they
+are **not tied to Claude** — they work with any tool-capable model. This project
+loads them via [pydantic-ai-skills](https://pypi.org/project/pydantic-ai-skills/)
+(progressive disclosure: metadata first, full `SKILL.md` + scripts on demand)
+from `.claude/skills/`. The same skill files are portable to Claude Code, OpenAI
+Codex, Mistral, OpenCode, and other runtimes that adopt the standard.
 
 ## License
 

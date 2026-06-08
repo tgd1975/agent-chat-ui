@@ -4,7 +4,7 @@
 #   2) docker compose up --build
 #   3) open http://localhost:8000
 #
-# One container runs LiteLLM (:4000) + Chainlit (:8000) + the Claude Agent SDK.
+# One container runs LiteLLM (:4000) + Chainlit (:8000) + the Pydantic AI agent.
 # LiteLLM routes to GitHub Models (api authenticated with your GitHub PAT).
 services:
   app:
@@ -12,8 +12,9 @@ services:
     env_file:
       - .env                                  # provides GITHUB_API_KEY
     environment:
-      ANTHROPIC_BASE_URL: http://localhost:4000   # LiteLLM (same container)
-      ANTHROPIC_AUTH_TOKEN: sk-local-master       # must match litellm master_key
+      LLM_BASE_URL: http://localhost:4000/v1      # LiteLLM, OpenAI-compatible (same container)
+      LLM_API_KEY: sk-local-master                # must match litellm master_key
+      ANTHROPIC_AUTH_TOKEN: sk-local-master       # litellm master_key
       AGENT_MODEL: github                         # the LiteLLM route -> GitHub Models
       # Dummies so LiteLLM loads the other (unused) routes without complaint:
       ANTHROPIC_API_KEY: unused

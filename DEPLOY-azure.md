@@ -6,15 +6,14 @@ for the Chainlit chat UI.
 
 ```
 Browser ──HTTPS──▶ Container App (ingress :8000)
-                     ├─ Chainlit UI ─▶ Claude Agent SDK ─▶ claude CLI
-                     │                         │ ANTHROPIC_BASE_URL=http://localhost:4000
+                     ├─ Chainlit UI ─▶ Pydantic AI agent (Skills + MCP)
+                     │                         │ LLM_BASE_URL=http://localhost:4000/v1
                      └─ LiteLLM proxy :4000 ──▶ Azure OpenAI (gpt-4o deployment)
 ```
 
-> Heads-up on fidelity: Agent **Skills** and Anthropic-style tool use are a Claude
-> runtime feature. Routing to Azure OpenAI works (LiteLLM translates the Anthropic
-> Messages API ↔ Azure), but tool/skill behaviour is best on a real Claude route.
-> For maximum fidelity, point `AGENT_MODEL` at `claude-default` instead.
+> Note: Agent **Skills** (`SKILL.md`) are an open, model-agnostic standard, so
+> they work over Azure OpenAI too. How reliably a skill/tool is triggered depends
+> on the model's tool-calling quality — gpt-4o(-mini) handles it well.
 
 ## Prerequisites
 
@@ -65,7 +64,8 @@ az containerapp create \
   --min-replicas 1 --max-replicas 1 \
   --secrets azure-key="$AZURE_API_KEY" master-key="$MASTER_KEY" \
   --env-vars \
-    ANTHROPIC_BASE_URL=http://localhost:4000 \
+    LLM_BASE_URL=http://localhost:4000/v1 \
+    LLM_API_KEY=secretref:master-key \
     ANTHROPIC_AUTH_TOKEN=secretref:master-key \
     AGENT_MODEL=copilot \
     AZURE_API_BASE="$AZURE_API_BASE" \

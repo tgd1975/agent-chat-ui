@@ -210,7 +210,8 @@ az containerapp env show -n "$ENVNAME" -g "$RG" -o none 2>/dev/null || \
   az containerapp env create -n "$ENVNAME" -g "$RG" -l "$INFRA_LOC" -o none
 
 ENVVARS=(
-  ANTHROPIC_BASE_URL=http://localhost:4000
+  LLM_BASE_URL=http://localhost:4000/v1
+  LLM_API_KEY=secretref:master-key
   ANTHROPIC_AUTH_TOKEN=secretref:master-key
   AGENT_MODEL=copilot
   "AZURE_API_BASE=$AZURE_API_BASE"

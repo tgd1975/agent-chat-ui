@@ -1,5 +1,5 @@
 # LiteLLM proxy config — the "configurable LLM" knob.
-# Exposes an Anthropic-compatible /v1/messages endpoint on :4000.
+# Exposes an OpenAI-compatible endpoint on :4000 (the agent calls /v1).
 # Switch models by setting AGENT_MODEL (in .env) to one of the model_name values.
 #
 #   litellm --config litellm.config.yaml --port 4000

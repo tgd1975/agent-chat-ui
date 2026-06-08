@@ -1,6 +1,6 @@
 """A minimal example MCP server with a couple of demo tools.
 
-Spawned automatically by the Agent SDK over stdio (see agent.py). Replace these
+Spawned automatically by the agent over stdio (see agent.py). Replace these
 tools with your own, or point agent.py at a different/real MCP server instead.
 
 Run standalone (for debugging):  python mcp/server.py

@@ -6,7 +6,7 @@ Access Token. No Azure, no quota requests.
 
 ```
 Browser → http://localhost:8000
-            └─ Chainlit → Claude Agent SDK → LiteLLM (:4000) → GitHub Models (gpt-4o-mini)
+            └─ Chainlit → Pydantic AI (Skills + MCP) → LiteLLM (:4000) → GitHub Models (gpt-4o-mini)
 ```
 
 > Note: this is **GitHub Models** (a GitHub API product), not the Copilot editor
@@ -43,7 +43,7 @@ Stop with `Ctrl+C`; remove with `docker compose down`.
   model, change the `github` route in `litellm.config.yaml` to `github/gpt-4o`.
 - **Rate limits:** the free GitHub Models tier has low per-minute limits. If you
   see 429s, wait a moment or switch to `gpt-4o-mini`. It's enough to prove the
-  pipeline (UI → Agent SDK → LiteLLM → model) works.
+  pipeline (UI → Pydantic AI → LiteLLM → model) works.
 - **Other backends:** the same image supports Anthropic, an internal OpenAI-
   compatible LLM farm (`farm-gpt`), Azure (`copilot`), or a local model
   (`ollama`) — just change `AGENT_MODEL` and the matching keys in `.env` /

@@ -1,12 +1,13 @@
-"""Factory for the Claude Agent SDK client.
+"""Model-agnostic agent engine, built on Pydantic AI.
 
-Ties together the three configurable bits:
-  * model      -> a LiteLLM *route* (model_name), not a raw provider model
-  * MCP server -> spawned over stdio from mcp/server.py
-  * skills     -> discovered from .claude/skills/ (setting_sources=["project"])
+This replaces the Claude-specific Agent SDK so the whole stack is no longer tied
+to Claude. It implements the *open* Agent Skills standard (SKILL.md, via
+pydantic-ai-skills) and connects MCP servers — both work with ANY tool-capable
+model, not just Claude.
 
-The SDK talks the Anthropic Messages API; ANTHROPIC_BASE_URL (see .env) points it
-at the LiteLLM proxy, so the actual model is chosen by routing, not code.
+The model is selected by routing through the LiteLLM proxy (OpenAI-compatible
+endpoint), so the underlying LLM (GitHub Models / Mistral / local / Claude / …)
+is a config choice (AGENT_MODEL = a LiteLLM route), not a code change.
 """
 from __future__ import annotations
 
@@ -14,7 +15,11 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.mcp import MCPToolset
+from pydantic_ai_skills import SkillsToolset
 
 load_dotenv()
 
@@ -27,31 +32,33 @@ SYSTEM_PROMPT = (
 )
 
 
-def make_client() -> ClaudeSDKClient:
-    """Build a configured (but not yet connected) Agent SDK client."""
-    options = ClaudeAgentOptions(
-        # AGENT_MODEL is a LiteLLM route name (claude-default / farm-gpt / copilot).
-        model=os.environ.get("AGENT_MODEL", "claude-default"),
-        system_prompt=SYSTEM_PROMPT,
-        # --- MCP server wired in: SDK spawns mcp/server.py over stdio ---
-        mcp_servers={
-            "demo": {
-                "type": "stdio",
-                "command": "python",
-                "args": [str(PROJECT_DIR / "mcp" / "server.py")],
-            },
-            # For an already-running HTTP MCP server instead, use:
-            # "remote": {"type": "http", "url": "http://localhost:9000/mcp"},
-        },
-        # --- Skills: load .claude/skills/ from this project directory ---
-        # setting_sources=["project"] makes the SDK read the project's .claude/
-        # settings, which is where Agent Skills (SKILL.md) are discovered.
-        cwd=str(PROJECT_DIR),
-        setting_sources=["project"],
-        # Allow the Skill tool plus this MCP server's tools.
-        allowed_tools=["Skill", "mcp__demo__*"],
-        # POC convenience. For real side effects, swap this for a can_use_tool
-        # callback to add human-in-the-loop approval.
-        permission_mode="acceptEdits",
+def make_agent() -> Agent:
+    """Build a model-agnostic agent with Skills + MCP wired in."""
+    # OpenAI-compatible endpoint — defaults to the LiteLLM proxy. AGENT_MODEL is
+    # a LiteLLM route name (e.g. "github", "ollama", "claude-default").
+    base_url = os.environ.get("LLM_BASE_URL", "http://localhost:4000/v1")
+    api_key = (
+        os.environ.get("LLM_API_KEY")
+        or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        or "sk-local-master"
     )
-    return ClaudeSDKClient(options=options)
+    model_name = os.environ.get("AGENT_MODEL", "github")
+
+    model = OpenAIChatModel(
+        model_name,
+        provider=OpenAIProvider(base_url=base_url, api_key=api_key),
+    )
+
+    # --- Agent Skills: the OPEN SKILL.md standard, discovered from .claude/skills/ ---
+    # Progressive disclosure (metadata first, full SKILL.md + scripts on demand)
+    # is handled by the toolset; works with any tool-capable model.
+    skills = SkillsToolset(directories=[str(PROJECT_DIR / ".claude" / "skills")])
+
+    # --- MCP: spawn the demo server over stdio ---
+    demo_mcp = MCPToolset(str(PROJECT_DIR / "mcp" / "server.py"))
+
+    return Agent(
+        model,
+        instructions=SYSTEM_PROMPT,
+        toolsets=[skills, demo_mcp],
+    )
